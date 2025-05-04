@@ -1,0 +1,39 @@
+version: '3.8'
+services:
+  observer:
+    build: .
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/etc/axom:ro # Mount config directory for rules.yaml
+    environment:
+      - AXOM_API_KEY=test123
+      - OBSERVER_MODE=debug
+      - AXOM_BACKEND_URL=http://localhost:8080 # Optional override
+      - AXOM_SKIP_TLS_VERIFY=1
+    healthcheck:
+      test: ["CMD", "pgrep", "observer"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  demo-ai:
+    image: python:3.9
+    volumes:
+      - ./config:/etc/axom:ro
+      - ./demo-ai-app.py:/demo-ai-app.py
+    command: >
+      sh -c "pip install flask && python /demo-ai-app.py"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
