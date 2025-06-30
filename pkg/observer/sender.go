@@ -24,6 +24,7 @@ import (
 //   AXOM_SKIP_TLS_VERIFY   - Optional. Set to "1" to skip TLS verification (testing only!)
 //   AXOM_BATCH_SIZE        - Optional. Batch size for sending signals. Default: 50
 //   AXOM_FLUSH_INTERVAL    - Optional. Flush interval in seconds. Default: 10
+//   AXOM_METRICS_ENABLED   - Optional. Set to "0" to disable Prometheus metrics server. Default: enabled.
 
 var (
 	signalsSent = prometheus.NewCounter(prometheus.CounterOpts{
@@ -34,21 +35,24 @@ var (
 		Name: "axom_signals_dropped_total",
 		Help: "Total number of signals dropped after retries",
 	})
+	metricsServerStarted = false
 )
 
 func init() {
 	prometheus.MustRegister(signalsSent, signalsDropped)
-	go func() {
-		// Production: run metrics server in a goroutine, allow graceful shutdown via context if needed
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		server := &http.Server{Addr: ":2112", Handler: mux}
+	// Only start metrics server if enabled (default: true)
+	if os.Getenv("AXOM_METRICS_ENABLED") != "0" && !metricsServerStarted {
+		metricsServerStarted = true
 		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
+			server := &http.Server{Addr: ":2112", Handler: mux}
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Printf("Prometheus metrics server error: %v", err)
 			}
 		}()
-	}()
+	}
+	log.Println("[observer] SignalSender initialized. Prometheus metrics enabled:", os.Getenv("AXOM_METRICS_ENABLED") != "0")
 }
 
 type SignalSender struct {
@@ -59,10 +63,13 @@ type SignalSender struct {
 	flushInterval time.Duration
 }
 
-func NewSignalSender(apiKey string) *SignalSender {
-	url := os.Getenv("AXOM_BACKEND_URL")
+// NewSignalSender creates a new SignalSender with config values.
+func NewSignalSender(apiKey, url string, batchSize int, flushInterval time.Duration) *SignalSender {
 	if url == "" {
-		url = "https://api.axom.ai/ingest"
+		url = os.Getenv("AXOM_BACKEND_URL")
+		if url == "" {
+			url = "http://localhost:8000/ingest"
+		}
 	}
 	skipTLS := os.Getenv("AXOM_SKIP_TLS_VERIFY") == "1"
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -72,21 +79,26 @@ func NewSignalSender(apiKey string) *SignalSender {
 		}
 		client.Transport = tr
 	}
-
-	// Configurable batch size and flush interval
-	batchSize := 50
-	if v := os.Getenv("AXOM_BATCH_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			batchSize = n
+	if batchSize <= 0 {
+		if v := os.Getenv("AXOM_BATCH_SIZE"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				batchSize = n
+			}
+		}
+		if batchSize <= 0 {
+			batchSize = 50
 		}
 	}
-	flushInterval := 10 * time.Second
-	if v := os.Getenv("AXOM_FLUSH_INTERVAL"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			flushInterval = time.Duration(n) * time.Second
+	if flushInterval <= 0 {
+		if v := os.Getenv("AXOM_FLUSH_INTERVAL"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				flushInterval = time.Duration(n) * time.Second
+			}
+		}
+		if flushInterval <= 0 {
+			flushInterval = 10 * time.Second
 		}
 	}
-
 	return &SignalSender{
 		apiKey:        apiKey,
 		url:           url,
@@ -128,18 +140,20 @@ func (s *SignalSender) sendBatchWithRetry(signals []models.Signal) {
 	const maxRetries = 5
 	const baseDelay = 2 * time.Second
 	var attempt int
+	log.Printf("[observer] Attempting to send batch of %d signals to %s", len(signals), s.url)
 	for {
 		err, retry, status := s.sendBatchOnce(signals)
 		if err == nil {
+			log.Printf("[observer] Successfully sent batch of %d signals", len(signals))
 			return
 		}
 		if !retry || attempt >= maxRetries {
-			log.Printf("Failed to send batch after %d attempts (last status: %d): %v", attempt+1, status, err)
+			log.Printf("[observer] Failed to send batch after %d attempts (last status: %d): %v", attempt+1, status, err)
 			signalsDropped.Add(float64(len(signals)))
 			return
 		}
 		delay := time.Duration(math.Pow(2, float64(attempt))) * baseDelay
-		log.Printf("Batch send failed with status %d, retrying in %v (attempt %d/%d)...", status, delay, attempt+1, maxRetries)
+		log.Printf("[observer] Batch send failed with status %d, retrying in %v (attempt %d/%d)...", status, delay, attempt+1, maxRetries)
 		time.Sleep(delay)
 		attempt++
 	}

@@ -1,194 +1,273 @@
-# Axom Observer Sidecar
+# Axom Observer - AI Traffic Monitoring Sidecar
 
-Axom Observer is a plug-and-play, production-grade sidecar for monitoring and metering AI agent usage, supporting HTTP/gRPC/WebSocket, system resource usage, and DB calls (Postgres, MySQL, and extensible to others). It requires **zero code changes** to your AI agent.
+A production-grade MITM proxy for monitoring AI API traffic in real-time. Designed to run as a sidecar container alongside your AI applications.
 
----
+## 🚀 Features
 
-## How It Works
+- **Production MITM Proxy**: Built with `gomitmproxy` for robust HTTPS interception
+- **AI Provider Detection**: Automatically detects 20+ AI service providers
+- **Real-time Monitoring**: Captures AI requests/responses with latency metrics
+- **Task Detection**: Identifies and groups related AI operations
+- **Containerized**: Ready for sidecar deployment in Kubernetes/Docker
+- **Multi-protocol**: Supports HTTP, HTTPS, and WebSocket traffic
 
-```mermaid
-flowchart LR
-    subgraph Host/Pod
-        A[AI Agent] -- Outbound/Inbound Traffic --> B[Axom Observer Sidecar]
-    end
-    B -- Signals (Usage, Outcome, Metadata, System, DB) --> C[Axom SaaS Backend]
-    C -- Dashboard/API --> D[You]
+## 🏗️ Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Your AI App   │───▶│  Axom Observer  │───▶│  AI Providers   │
+│                 │    │   (Sidecar)     │    │                 │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │   Backend API   │
+                       │  (Signals)      │
+                       └─────────────────┘
 ```
 
-- **Traffic Sniffing:** Observer captures all network traffic using pcap/eBPF.
-- **Protocol Detection:** Dynamically detects HTTP, gRPC, WebSocket, and DB protocols (Postgres, MySQL, extensible).
-- **System Metrics:** Periodically collects CPU and memory usage (optionally GPU).
-- **Rule-based Extraction:** Uses YAML config to extract metrics, outcomes, and alerts.
-- **Signal Export:** Sends usage, outcome, system, and DB signals securely to your backend for analytics, pricing, and visualization.
+## 🐳 Quick Start with Docker
 
----
+### 1. Build and Run with Docker Compose
 
-## Quick Start (Local)
+```bash
+# Clone the repository
+git clone <repository-url>
+cd Axom-Observer
 
-1. **Clone the repo and build:**
-   ```sh
-   git clone <your-repo-url>
-   cd axom-observer
-   docker-compose up --build
-   ```
+# Build and start all services
+docker-compose up -d
 
-2. **Config:**
-   - Edit `config/rules.yaml` to define what to extract and alert on.
-   - The config is auto-mounted into the container at `/etc/axom/rules.yaml`.
-
-3. **Demo AI Service:**
-   - A sample Flask app is included and will be started by Docker Compose.
-
-4. **Metrics:**
-   - Prometheus metrics are exposed at [localhost:2112/metrics](http://localhost:2112/metrics).
-
----
-
-## Integration (Production/Kubernetes/EKS)
-
-- **Sidecar Pattern on EKS:**  
-  Deploy the observer as a sidecar container in the same Kubernetes pod as your AI agent on EKS (Amazon Elastic Kubernetes Service).  
-  This allows the observer to capture all network traffic to/from the AI agent without code changes.
-
-- **Kubernetes YAML Example:**
-  ```yaml
-  apiVersion: v1
-  kind: Pod
-  metadata:
-    name: ai-agent-with-observer
-  spec:
-    containers:
-      - name: ai-agent
-        image: <your-ai-agent-image>
-        # ...your agent config...
-      - name: axom-observer
-        image: <your-observer-image>
-        securityContext:
-          capabilities:
-            add: ["NET_ADMIN", "NET_RAW"]
-        volumeMounts:
-          - name: axom-config
-            mountPath: /etc/axom
-        env:
-          - name: AXOM_API_KEY
-            valueFrom:
-              secretKeyRef:
-                name: axom-api-key
-                key: api-key
-          - name: AXOM_BACKEND_URL
-            value: "https://api.axom.ai/ingest"
-    volumes:
-      - name: axom-config
-        configMap:
-          name: axom-rules
-  ```
-
-- **Config:**  
-  Mount your `rules.yaml` at `/etc/axom/rules.yaml` using a ConfigMap.
-
-- **Environment:**  
-  Set `AXOM_API_KEY` (from a Kubernetes Secret) and optionally `AXOM_BACKEND_URL`.
-
-- **Security:**  
-  The observer container needs `NET_ADMIN` and `NET_RAW` capabilities to sniff traffic.
-
----
-
-## What Gets Sent
-
-- **Signals:**  
-  Each API/DB call and system metric is captured as a `Signal` (see `pkg/models/signal.go`), including:
-  - Protocol, endpoints, operation, status, latency, extracted metrics, outcome alerts, CPU/memory/GPU usage, and DB operation details.
-- **Privacy:**  
-  Sensitive fields (e.g., API keys) are redacted before export.
-
----
-
-## Extending and Maintaining
-
-- **Add Protocols/DBs:**  
-  Implement new protocol handlers in `pkg/protocols/` and update protocol detection in the sniffer.
-  - Example: To support MongoDB, add `ProcessMongoDB` and detect port 27017.
-- **Improve Parsing:**  
-  For production, use proper protocol parsers for DBs and application protocols.
-- **Metrics/Alerts:**  
-  Update `config/rules.yaml` and extend `getMetric` in `pkg/observer/classifier.go`.
-- **System Metrics:**  
-  Extend `systemUsageLoop` for GPU or other resources.
-- **Testing:**  
-  Add unit/integration tests for protocol handlers and sniffer logic.
-- **Observability:**  
-  Use Prometheus metrics and logs for monitoring sidecar health.
-
----
-
-## Production-Grade Practices
-
-- **Error Handling:**  
-  All protocol handlers and sniffer logic log errors and avoid panics.
-- **Extensibility:**  
-  Adding new protocols/DBs is straightforward and isolated.
-- **Security:**  
-  Sensitive fields are redacted before export.
-- **Performance:**  
-  Signals are batched and exported efficiently, with exponential backoff on errors.
-- **Configuration:**  
-  Batch size, flush interval, and backend URL are configurable via environment variables.
-- **Documentation:**  
-  Code and README are well-commented for maintainability.
-
----
-
-## Run Standalone (No Docker)
-
-```sh
-go build -o observer ./cmd/observer
-sudo ./observer
+# Check service status
+docker-compose ps
 ```
-- Requires `libpcap` installed.
+
+### 2. Test the Setup
+
+```bash
+# Run comprehensive tests
+chmod +x test_containerized.sh
+./test_containerized.sh
+
+# Or test individual components
+chmod +x test_real_ai_endpoints.sh
+./test_real_ai_endpoints.sh
+```
+
+### 3. Access Services
+
+- **Observer HTTP Proxy**: http://localhost:8888
+- **Observer HTTPS Proxy**: http://localhost:8443
+- **Demo AI App**: http://localhost:5002
+- **Backend Dashboard**: http://localhost:8080
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CUSTOMER_ID` | `test-customer` | Your customer identifier |
+| `AGENT_ID` | `test-agent` | Your agent identifier |
+| `BACKEND_URL` | `http://localhost:8080/api/v1/signals` | Backend API endpoint |
+| `LOG_LEVEL` | `info` | Logging level (debug, info, warn, error) |
+
+### Docker Compose Configuration
+
+```yaml
+services:
+  observer:
+    build: .
+    environment:
+      - CUSTOMER_ID=your-customer-id
+      - AGENT_ID=your-agent-id
+      - BACKEND_URL=http://your-backend/api/v1/signals
+    ports:
+      - "8888:8888"   # HTTP proxy
+      - "8443:8443"   # HTTPS proxy
+```
+
+## 🚀 Sidecar Deployment
+
+### Kubernetes Deployment
+
+```bash
+# Apply the sidecar deployment
+kubectl apply -f k8s/observer-sidecar.yaml
+
+# Check deployment status
+kubectl get pods -l app=ai-app-with-observer
+```
+
+### Custom Application Integration
+
+To use the observer as a sidecar with your application:
+
+1. **Set proxy environment variables**:
+```bash
+export HTTP_PROXY=http://localhost:8888
+export HTTPS_PROXY=http://localhost:8443
+export NO_PROXY=localhost,127.0.0.1
+```
+
+2. **Configure your AI client**:
+```python
+import requests
+
+# Your AI requests will automatically go through the proxy
+response = requests.post(
+    "https://api.openai.com/v1/chat/completions",
+    json={
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}]
+    },
+    proxies={
+        "http": "http://localhost:8888",
+        "https": "http://localhost:8443"
+    }
+)
+```
+
+## 🔍 Supported AI Providers
+
+The observer automatically detects traffic from:
+
+### LLM Providers
+- OpenAI (api.openai.com)
+- Anthropic (api.anthropic.com)
+- Google AI (generativelanguage.googleapis.com)
+- Cohere (api.cohere.ai)
+- Together AI (api.together.ai)
+- Groq (api.groq.com)
+- Hugging Face (api-inference.huggingface.co)
+- Azure OpenAI (*.openai.azure.com)
+
+### Speech Services
+- Deepgram (api.deepgram.com)
+- AssemblyAI (api.assemblyai.com)
+- ElevenLabs (api.elevenlabs.io)
+- PlayHT (api.play.ht)
+- Amazon Polly (polly.*.amazonaws.com)
+- Azure TTS (*.cognitiveservices.azure.com)
+
+### Communication Services
+- Twilio (api.twilio.com)
+- Plivo (api.plivo.com)
+- Vonage (api.nexmo.com, api.vonage.com)
+- Daily (api.daily.co)
+- 100ms (api.100ms.live)
+
+## 🧪 Testing
+
+### Test with Real AI Endpoints
+
+```bash
+# Test with free AI endpoints
+./test_real_ai_endpoints.sh
+
+# Test with demo app
+curl -X POST http://localhost:5002/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 50
+  }'
+```
+
+### Test with Your Own AI Applications
+
+1. **Configure your app to use the proxy**:
+```bash
+export HTTP_PROXY=http://localhost:8888
+export HTTPS_PROXY=http://localhost:8443
+```
+
+2. **Make AI API calls** - they'll be automatically captured
+
+3. **Check the observer logs**:
+```bash
+docker logs axom-observer
+```
+
+## 🔒 Security Considerations
+
+### Certificate Management
+
+The observer uses `gomitmproxy`'s built-in CA certificate. For production:
+
+1. **Trust the CA certificate** in your client applications
+2. **Use custom certificates** if needed (requires `gomitmproxy` patching)
+3. **Monitor certificate expiration**
+
+### Network Security
+
+- Run the observer in a secure network environment
+- Use network policies to restrict access
+- Monitor for unauthorized proxy usage
+
+## 🛠️ Development
+
+### Building from Source
+
+```bash
+# Build the observer
+go build -o observer main.go
+
+# Run locally
+./observer --customer-id="dev" --agent-id="local"
+```
+
+### Adding New AI Providers
+
+Edit `pkg/observer/ai_traffic_monitor.go` to add new providers:
+
+```go
+{
+    Name: "New Provider",
+    Domains: []string{"api.newprovider.com"},
+    APIPatterns: []string{"/v1/chat", "/v1/embed"},
+},
+```
+
+## 📈 Production Deployment
+
+### Resource Requirements
+
+- **CPU**: 100-500m (depending on traffic volume)
+- **Memory**: 128-512Mi (depending on traffic volume)
+- **Storage**: Minimal (logs and metrics)
+
+### Scaling Considerations
+
+- Deploy one observer per application pod
+- Use horizontal pod autoscaling for high-traffic applications
+- Monitor resource usage and adjust limits accordingly
+
+### High Availability
+
+- Use Kubernetes deployments with multiple replicas
+- Implement proper health checks and readiness probes
+- Set up monitoring and alerting
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+## 📄 License
+
+MIT License - see LICENSE file for details.
+
+## 🆘 Support
+
+- **Issues**: Create an issue on GitHub
+- **Documentation**: Check the docs folder
+- **Examples**: See the demo and test directories
 
 ---
 
-## Health & Monitoring
-
-- Healthcheck is included in Docker Compose.
-- Prometheus metrics at `/metrics` (port 2112).
-
----
-
-## Security & Privacy
-
-- Sensitive fields (e.g., API keys, authorization) are redacted before export.
-- Redaction is configurable in code/config.
-- All traffic is sent over HTTPS with API key authentication.
-
-## GPU & Advanced Metrics
-
-- CPU, memory, and (optionally) GPU usage are collected and exported.
-- GPU usage requires NVIDIA drivers and `nvidia-smi` in the container.
-
-## Advanced Outcome Detection
-
-- Outcome detection supports status code and content-based matching (regex).
-- Extend `config/rules.yaml` and classifier logic for custom outcome logic.
-
-## Testing & Observability
-
-- Prometheus metrics at `/metrics` (port 2112).
-- Add unit/integration tests for protocol handlers and sniffer logic for production deployments.
-
-## Extending
-
-- Add new protocol handlers in `pkg/protocols/`.
-- Update protocol detection in the sniffer.
-- Use real protocol parsers for production-grade DB and application protocol support.
-
----
-
-## License
-
-MIT
-
----
-**Questions?**  
-Open an issue or contact the Axom team.
+**Note**: This observer is designed for monitoring and debugging purposes. Ensure compliance with your organization's security policies and data handling requirements.

@@ -1,39 +1,57 @@
 version: '3.8'
+
 services:
+  # AI Observer as sidecar
   observer:
     build: .
-    network_mode: "host"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./config:/etc/axom:ro # Mount config directory for rules.yaml
+    container_name: axom-observer
+    ports:
+      - "8888:8888"   # HTTP proxy
+      - "8443:8443"   # HTTPS proxy
     environment:
-      - AXOM_API_KEY=test123
-      - OBSERVER_MODE=debug
-      - AXOM_BACKEND_URL=http://localhost:8080 # Optional override
-      - AXOM_SKIP_TLS_VERIFY=1
-    healthcheck:
-      test: ["CMD", "pgrep", "observer"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-
-  demo-ai:
-    image: python:3.9
+      - CUSTOMER_ID=${CUSTOMER_ID:-test-customer}
+      - AGENT_ID=${AGENT_ID:-test-agent}
+      - BACKEND_URL=${BACKEND_URL:-http://localhost:8080/api/v1/signals}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
-      - ./config:/etc/axom:ro
-      - ./demo-ai-app.py:/demo-ai-app.py
-    command: >
-      sh -c "pip install flask && python /demo-ai-app.py"
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
+      - ./certs:/app/certs:ro  # Mount certificates if needed
+      - observer-logs:/app/logs
+    networks:
+      - observer-network
+    restart: unless-stopped
+
+  # Demo AI app for testing
+  demo-ai-app:
+    build:
+      context: ./demo
+      dockerfile: Dockerfile
+    container_name: demo-ai-app
+    ports:
+      - "5002:5002"
+    environment:
+      - FLASK_ENV=development
+    networks:
+      - observer-network
+    restart: unless-stopped
+    depends_on:
+      - observer
+
+  # Backend service for receiving signals
+  backend:
+    image: nginx:alpine
+    container_name: signal-backend
+    ports:
+      - "8080:80"
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/html:/usr/share/nginx/html:ro
+    networks:
+      - observer-network
+    restart: unless-stopped
+
+volumes:
+  observer-logs:
+
+networks:
+  observer-network:
+    driver: bridge

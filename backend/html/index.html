@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Axom Observer Backend</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .healthy {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .endpoint {
+            background-color: #e2e3e5;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        .metrics {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Axom Observer Backend</h1>
+        
+        <div class="status healthy">
+            ✅ Service is running and ready to receive signals
+        </div>
+
+        <h2>📡 Available Endpoints</h2>
+        
+        <div class="endpoint">
+            <strong>Health Check:</strong> GET /health
+        </div>
+        
+        <div class="endpoint">
+            <strong>Signal Receiver:</strong> POST /api/v1/signals
+        </div>
+        
+        <div class="endpoint">
+            <strong>Metrics:</strong> GET /metrics
+        </div>
+
+        <h2>📊 Signal Statistics</h2>
+        <div class="metrics" id="metrics">
+            Loading metrics...
+        </div>
+
+        <h2>🔧 Configuration</h2>
+        <p>This backend service is configured to receive signals from the Axom Observer and log them for analysis.</p>
+        
+        <h2>📝 Usage</h2>
+        <p>To send signals to this backend, configure your observer with:</p>
+        <div class="endpoint">
+            BACKEND_URL=http://localhost:8080/api/v1/signals
+        </div>
+    </div>
+
+    <script>
+        // Fetch metrics
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/metrics');
+                const text = await response.text();
+                document.getElementById('metrics').innerHTML = '<pre>' + text + '</pre>';
+            } catch (error) {
+                document.getElementById('metrics').innerHTML = 'Error loading metrics: ' + error.message;
+            }
+        }
+
+        // Load metrics on page load
+        fetchMetrics();
+        
+        // Refresh metrics every 30 seconds
+        setInterval(fetchMetrics, 30000);
+    </script>
+</body>
+</html> 
