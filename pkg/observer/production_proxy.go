@@ -84,14 +84,13 @@ func (p *ProductionProxy) handleRequest(session *gomitmproxy.Session) (*http.Req
 	req := session.Request()
 	startTime := time.Now()
 
-	// Check if this is an AI API call
+	// Try to detect AI provider, but proceed regardless
 	aiProvider := p.detectAIProvider(req.URL.Host, req.URL.Path)
 	if aiProvider == nil {
-		// Not an AI API call, pass through
-		return nil, nil
+		aiProvider = &AIProvider{Name: "Unknown", Domains: []string{req.URL.Host}, APIPatterns: []string{req.URL.Path}}
 	}
 
-	p.logger.Printf("📡 AI Request detected: %s %s -> %s",
+	p.logger.Printf("📡 Request detected: %s %s -> %s",
 		aiProvider.Name, req.Method, req.URL.String())
 
 	// Capture request body
@@ -102,7 +101,7 @@ func (p *ProductionProxy) handleRequest(session *gomitmproxy.Session) (*http.Req
 	}
 	req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	// Parse AI request
+	// Parse request
 	aiRequest := p.parseAIRequest(req, bodyBytes, aiProvider)
 
 	// Store request data in session for response handling
@@ -119,23 +118,23 @@ func (p *ProductionProxy) handleResponse(session *gomitmproxy.Session) *http.Res
 	resp := session.Response()
 	req := session.Request()
 
-	aiProviderVal, ok := session.GetProp("ai_provider")
-	aiProvider, ok := aiProviderVal.(*AIProvider)
-	if !ok {
-		return nil
+	aiProviderVal, _ := session.GetProp("ai_provider")
+	aiProvider, _ := aiProviderVal.(*AIProvider)
+	if aiProvider == nil {
+		aiProvider = &AIProvider{Name: "Unknown", Domains: []string{req.URL.Host}, APIPatterns: []string{req.URL.Path}}
 	}
-	startTimeVal, ok := session.GetProp("start_time")
+	startTimeVal, _ := session.GetProp("start_time")
 	startTime, ok := startTimeVal.(time.Time)
 	if !ok {
 		startTime = time.Now()
 	}
-	aiRequestVal, ok := session.GetProp("ai_request")
-	aiRequest, ok := aiRequestVal.(map[string]interface{})
-	if !ok {
+	aiRequestVal, _ := session.GetProp("ai_request")
+	aiRequest, _ := aiRequestVal.(map[string]interface{})
+	if aiRequest == nil {
 		aiRequest = make(map[string]interface{})
 	}
 
-	p.logger.Printf("📡 AI Response detected: %s %s -> %s (status: %d)",
+	p.logger.Printf("📡 Response detected: %s %s -> %s (status: %d)",
 		aiProvider.Name, req.Method, req.URL.String(), resp.StatusCode)
 
 	// Capture response body
@@ -146,7 +145,7 @@ func (p *ProductionProxy) handleResponse(session *gomitmproxy.Session) *http.Res
 	}
 	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
-	// Parse AI response
+	// Parse response
 	aiResponse := p.parseAIResponse(bodyBytes, aiProvider)
 
 	// Calculate latency
@@ -155,17 +154,10 @@ func (p *ProductionProxy) handleResponse(session *gomitmproxy.Session) *http.Res
 	// Create signal
 	signal := p.createSignal(req, aiRequest, aiResponse, resp.StatusCode, latency, aiProvider)
 
-	// Detect task if this is a new task
-	if task := p.taskDetector.DetectTask(signal); task != nil {
-		signal.TaskID = task.ID
-		signal.TaskType = task.Type
-		signal.Metadata["task_confidence"] = task.Metadata["confidence"]
-	}
-
 	// Send signal
 	select {
 	case p.signalCh <- signal:
-		p.logger.Printf("📡 Production AI signal captured: %s %s -> %s (latency: %.2fms)",
+		p.logger.Printf("📡 Production signal captured: %s %s -> %s (latency: %.2fms)",
 			aiProvider.Name, signal.Operation, req.URL.Host, signal.LatencyMS)
 	default:
 		p.logger.Printf("Signal channel full, dropping signal")
@@ -179,12 +171,10 @@ func (p *ProductionProxy) handleResponse(session *gomitmproxy.Session) *http.Res
 func (p *ProductionProxy) detectAIProvider(host, path string) *AIProvider {
 	for _, provider := range knownAIProviders {
 		for _, domain := range provider.Domains {
-			// Handle wildcard domains for services like Azure
 			matchPattern := strings.ReplaceAll(domain, "*", "")
-			if (strings.HasPrefix(domain, "*") && strings.HasSuffix(host, matchPattern)) ||
-				(!strings.HasPrefix(domain, "*") && host == domain) {
+			if strings.Contains(host, matchPattern) {
 				for _, apiPattern := range provider.APIPatterns {
-					if strings.HasPrefix(path, apiPattern) {
+					if strings.Contains(path, apiPattern) {
 						return &provider
 					}
 				}

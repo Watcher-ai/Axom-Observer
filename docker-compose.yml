@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # AI Observer as sidecar
   observer:
@@ -9,10 +7,16 @@ services:
       - "8888:8888"   # HTTP proxy
       - "8443:8443"   # HTTPS proxy
     environment:
-      - CUSTOMER_ID=${CUSTOMER_ID:-test-customer}
-      - AGENT_ID=${AGENT_ID:-test-agent}
-      - BACKEND_URL=${BACKEND_URL:-http://localhost:8080/api/v1/signals}
+      - CUSTOMER_ID=${CUSTOMER_ID}
+      - AGENT_ID=${AGENT_ID}
+      - CLIENT_ID=${CLIENT_ID}
+      - CLIENT_SECRET=${CLIENT_SECRET}
+      - BACKEND_URL=${BACKEND_URL:-https://api.axom.ai/ingest}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_ALL_TRAFFIC=${LOG_ALL_TRAFFIC:-true}
+      - MAIN_AI_CONTAINER_NAME=${MAIN_AI_CONTAINER_NAME:-my-ai-app}
+      - OBSERVER_DASHBOARD_USER=${OBSERVER_DASHBOARD_USER:-}
+      - OBSERVER_DASHBOARD_PASS=${OBSERVER_DASHBOARD_PASS:-}
     volumes:
       - ./certs:/app/certs:ro  # Mount certificates if needed
       - observer-logs:/app/logs

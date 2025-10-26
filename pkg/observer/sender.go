@@ -172,6 +172,7 @@ func (s *SignalSender) sendBatchOnce(signals []models.Signal) (error, bool, int)
 		return err, false, 0
 	}
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	req.Header.Set("X-Client-ID", os.Getenv("CLIENT_ID"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -208,6 +209,7 @@ func (s *SignalSender) SendBatchCompat(signals []models.Signal) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	req.Header.Set("X-Client-ID", os.Getenv("CLIENT_ID"))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
