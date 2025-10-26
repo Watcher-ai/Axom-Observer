@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ type AITrafficMonitor struct {
 	signalCh        chan<- models.Signal
 	customerID      string
 	agentID         string
+	logAllTraffic   bool
+	mainContainer   string
+	dashboardUser   string
+	dashboardPass   string
 }
 
 // AIProvider represents an AI service provider
@@ -211,12 +216,20 @@ var knownAIProviders = []AIProvider{
 
 // NewAITrafficMonitor creates a new AI traffic monitor
 func NewAITrafficMonitor(signalCh chan<- models.Signal, logger *log.Logger, customerID, agentID string) *AITrafficMonitor {
+	logAll := os.Getenv("LOG_ALL_TRAFFIC") == "true"
+	mainContainer := os.Getenv("MAIN_AI_CONTAINER_NAME")
+	dashboardUser := os.Getenv("OBSERVER_DASHBOARD_USER")
+	dashboardPass := os.Getenv("OBSERVER_DASHBOARD_PASS")
 	return &AITrafficMonitor{
-		logger:       logger,
-		signalCh:     signalCh,
-		customerID:   customerID,
-		agentID:      agentID,
-		taskDetector: NewTaskDetector(signalCh, logger, customerID, agentID),
+		logger:        logger,
+		signalCh:      signalCh,
+		customerID:    customerID,
+		agentID:       agentID,
+		taskDetector:  NewTaskDetector(signalCh, logger, customerID, agentID),
+		logAllTraffic: logAll,
+		mainContainer: mainContainer,
+		dashboardUser: dashboardUser,
+		dashboardPass: dashboardPass,
 	}
 }
 
@@ -225,7 +238,7 @@ func (m *AITrafficMonitor) Start(ctx context.Context) error {
 	m.logger.Println("🚀 Starting AI Traffic Monitor")
 
 	// Start HTTP proxy
-	m.httpProxy = NewHTTPProxy("8888", m.signalCh, m.logger, m.customerID, m.agentID)
+	m.httpProxy = NewHTTPProxy("8888", m.signalCh, m.logger, m.customerID, m.agentID, m.logAllTraffic, m.mainContainer)
 	if err := m.httpProxy.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start HTTP proxy: %w", err)
 	}
@@ -256,24 +269,28 @@ func (m *AITrafficMonitor) Stop(ctx context.Context) error {
 
 // HTTPProxy handles HTTP traffic
 type HTTPProxy struct {
-	port         string
-	signalCh     chan<- models.Signal
-	logger       *log.Logger
-	customerID   string
-	agentID      string
-	taskDetector *TaskDetector
-	server       *http.Server
+	port          string
+	signalCh      chan<- models.Signal
+	logger        *log.Logger
+	customerID    string
+	agentID       string
+	taskDetector  *TaskDetector
+	server        *http.Server
+	logAllTraffic bool
+	mainContainer string
 }
 
 // NewHTTPProxy creates a new HTTP proxy
-func NewHTTPProxy(port string, signalCh chan<- models.Signal, logger *log.Logger, customerID, agentID string) *HTTPProxy {
+func NewHTTPProxy(port string, signalCh chan<- models.Signal, logger *log.Logger, customerID, agentID string, logAllTraffic bool, mainContainer string) *HTTPProxy {
 	return &HTTPProxy{
-		port:         port,
-		signalCh:     signalCh,
-		logger:       logger,
-		customerID:   customerID,
-		agentID:      agentID,
-		taskDetector: NewTaskDetector(signalCh, logger, customerID, agentID),
+		port:          port,
+		signalCh:      signalCh,
+		logger:        logger,
+		customerID:    customerID,
+		agentID:       agentID,
+		taskDetector:  NewTaskDetector(signalCh, logger, customerID, agentID),
+		logAllTraffic: logAllTraffic,
+		mainContainer: mainContainer,
 	}
 }
 
@@ -310,13 +327,26 @@ func (p *HTTPProxy) Stop(ctx context.Context) error {
 func (p *HTTPProxy) handleRequest(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
+	p.logger.Printf("🔍 Received request: %s %s (Host: %s) [Container: %s]", r.Method, r.URL.Path, r.Host, p.mainContainer)
+
+	// Log all traffic if enabled
+	if p.logAllTraffic {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		p.logger.Printf("[ALL-TRAFFIC] %s %s Host: %s Container: %s Body: %s", r.Method, r.URL.Path, r.Host, p.mainContainer, string(bodyBytes))
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	}
+
 	// Check if this is an AI API call
-	aiProvider := p.detectAIProvider(r.URL.Host, r.URL.Path)
+	aiProvider := p.detectAIProvider(r.Host, r.URL.Path)
 	if aiProvider == nil {
+		p.logger.Printf("❌ Not an AI API call: %s %s (Host: %s)", r.Method, r.URL.Path, r.Host)
 		// Not an AI API call, forward as-is
 		p.forwardRequest(w, r)
 		return
 	}
+
+	p.logger.Printf("✅ AI API call detected: %s %s -> %s", aiProvider.Name, r.Method, r.URL.String())
 
 	// Capture request body
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -377,9 +407,25 @@ func (p *HTTPProxy) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 // detectAIProvider detects which AI provider this request is for
 func (p *HTTPProxy) detectAIProvider(host, path string) *AIProvider {
+	p.logger.Printf("🔍 Detecting AI provider: host='%s', path='%s'", host, path)
+
 	// First check if this is a direct request to the observer (proxy scenario)
 	// In this case, we detect based on path patterns only
 	if strings.Contains(host, "localhost") && (strings.Contains(host, "8888") || strings.Contains(host, "8443")) {
+		p.logger.Printf("✅ Localhost detection passed for host: %s", host)
+		for _, provider := range knownAIProviders {
+			for _, pattern := range provider.APIPatterns {
+				if strings.Contains(path, pattern) {
+					p.logger.Printf("✅ Found AI provider: %s with pattern: %s", provider.Name, pattern)
+					return &provider
+				}
+			}
+		}
+		p.logger.Printf("❌ No AI provider pattern matched for path: %s", path)
+	}
+
+	// Check for localhost:8888 or localhost:8443 specifically
+	if host == "localhost:8888" || host == "localhost:8443" {
 		for _, provider := range knownAIProviders {
 			for _, pattern := range provider.APIPatterns {
 				if strings.Contains(path, pattern) {
@@ -630,10 +676,10 @@ func (p *HTTPProxy) forwardAIRequest(r *http.Request, bodyBytes []byte) (*http.R
 	// Determine the actual AI service URL based on the request
 	var targetURL string
 
-	// For localhost requests, forward to the demo app
-	if strings.Contains(r.URL.Host, "localhost") || strings.Contains(r.URL.Host, "127.0.0.1") {
-		// Forward to demo app on port 5002
-		targetURL = fmt.Sprintf("http://localhost:5002%s", r.URL.Path)
+	// For localhost requests, forward to the mock AI provider
+	if strings.Contains(r.Host, "localhost") || strings.Contains(r.Host, "127.0.0.1") {
+		// Forward to mock AI provider for testing
+		targetURL = fmt.Sprintf("http://127.0.0.1:9999%s", r.URL.Path)
 	} else {
 		// For external services, use the original URL
 		targetURL = r.URL.String()
@@ -661,8 +707,47 @@ func (p *HTTPProxy) forwardAIRequest(r *http.Request, bodyBytes []byte) (*http.R
 
 // forwardRequest forwards non-AI requests
 func (p *HTTPProxy) forwardRequest(w http.ResponseWriter, r *http.Request) {
-	// Simple forwarding for non-AI requests
-	http.Error(w, "Not an AI API endpoint", http.StatusNotFound)
+	// Forward to mock AI provider for testing
+	targetURL := "http://127.0.0.1:9999" + r.URL.Path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	p.logger.Printf("🔄 Forwarding request to mock AI provider: %s", targetURL)
+
+	// Create new request
+	req, err := http.NewRequest(r.Method, targetURL, r.Body)
+	if err != nil {
+		http.Error(w, "Failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy headers
+	for key, values := range r.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+
+	// Make request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Failed to forward request", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for key, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Copy response body
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // generateSignalID generates a unique signal ID
